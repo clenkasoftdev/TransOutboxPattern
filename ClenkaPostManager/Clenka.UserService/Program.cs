@@ -1,4 +1,5 @@
 using Clenka.UserService.Data;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 
@@ -24,6 +25,15 @@ namespace Clenka.UserService
 
             builder.Services.AddDbContext<UserServiceContext>(options =>
                            options.UseSqlServer(builder.Configuration.GetConnectionString("UserServiceDb")));
+
+            //The first line tells the service provider to create a singleton and give it to anyone who wants a BackgroundEventService like your controller's constructor.
+            // However, the service provider is unaware that the singleton is actually an IHostedService and that you want it to call StartAsync()
+            builder.Services.AddSingleton<BackgroundEventService>();
+
+            //This line tells the service provider that you want to add a hosted service, so it'll call StartAsync() when the application starts running
+            builder.Services.AddHostedService<BackgroundEventService>(provider => 
+               provider.GetService<BackgroundEventService>()
+            );
 
             var app = builder.Build();
 

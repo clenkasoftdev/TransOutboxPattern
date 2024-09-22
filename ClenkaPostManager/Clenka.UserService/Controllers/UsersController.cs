@@ -30,8 +30,8 @@ namespace Clenka.UserService.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> PutUser(int id, User user)
         {
+            using var transacton = _context.Database.BeginTransaction();
             _context.Entry(user).State = EntityState.Modified;
-            await _context.SaveChangesAsync();
 
             var integrationEventData = JsonConvert.SerializeObject(new
             {
@@ -39,7 +39,17 @@ namespace Clenka.UserService.Controllers
                 name = user.Name,
             });
 
-            PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_UPDATE_EVENT, integrationEventData);
+            _context.OutboxEvents.Add(new OutboxEvent
+            {
+                Event = GlobalConstants.EXCHANGE_USER_UPDATE_EVENT,
+                Data = integrationEventData,
+                DateOccured = DateTime.Now
+            });
+            _context.SaveChanges();
+            transacton.Commit();
+
+            // PUBLISHING THE MESSAGE IS NO LONGER NEEDED. A BACKGROUND JOB SHALL TAKE CARE
+            // PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_UPDATE_EVENT, integrationEventData);
 
             return NoContent();
         }
@@ -47,8 +57,11 @@ namespace Clenka.UserService.Controllers
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
+            // Do this in a transaction
+            using var transaction = _context.Database.BeginTransaction();
+
             _context.Users.Add(user);
-            await _context.SaveChangesAsync();
+            _context.SaveChanges();
 
             var integrationEventData = JsonConvert.SerializeObject(new
             {
@@ -56,7 +69,19 @@ namespace Clenka.UserService.Controllers
                 name = user.Name,
             });
 
-            PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_ADD_EVENT, integrationEventData);
+            _context.OutboxEvents.Add(new OutboxEvent
+            {
+                Event = GlobalConstants.EXCHANGE_USER_ADD_EVENT,
+                Data = integrationEventData,
+                DateOccured = DateTime.Now
+            });
+
+            _context.SaveChanges();
+
+            transaction.Commit();
+
+            // PUBLISHING THE MESSAGE IS NO LONGER NEEDED. A BACKGROUND JOB SHALL TAKE CARE
+           // PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_ADD_EVENT, integrationEventData);
 
             return CreatedAtAction("GetUser", new { id = user.ID }, user);
         }

@@ -2,6 +2,7 @@
 using Clenka.Common.Constants;
 using Clenka.UserService.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
 using System.Runtime;
@@ -13,6 +14,8 @@ namespace Clenka.UserService
     {
         private IServiceScopeFactory _scopeFactory;
         private ILogger<BackgroundEventService> _logger;
+        private CancellationTokenSource _wakeupCancTokenSource = new CancellationTokenSource();
+
         public BackgroundEventService(IServiceScopeFactory serviceScopeFactory, ILogger<BackgroundEventService> logger)
         {
             _logger = logger;
@@ -33,6 +36,13 @@ namespace Clenka.UserService
             _logger.LogInformation($"{typeof(BackgroundEventService).Name} stopping");
         }
 
+        public void StartPublishingOutsandingOutBoxEevnts()
+        {
+            // send a request to cancel
+            _logger.LogInformation($"{typeof(BackgroundEventService).Name} request to start publishing cancellation event made");
+            _wakeupCancTokenSource.Cancel();
+        }
+
         private async Task PublishOutboxEvents(CancellationToken cancToken)
         {
             try
@@ -41,6 +51,11 @@ namespace Clenka.UserService
                 var connection = factory.CreateConnection();
                 var channel = connection.CreateModel();
                 channel.QueueDeclare(queue: "test", exclusive: false);
+
+                // Enable publisher notification
+                channel.ConfirmSelect();
+                IBasicProperties props = channel.CreateBasicProperties(); // construct completely empty content header 
+                props.DeliveryMode = 2; // 2 means persistent. 1 is non
 
                 while (!cancToken.IsCancellationRequested)
                 {
@@ -63,13 +78,28 @@ namespace Clenka.UserService
                             dbContext.SaveChanges();
                         }
                     }
+                    // create a linked cancellation token that will be in the cancelled state when any of the source tokens are in a cancelled state
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_wakeupCancTokenSource.Token, cancToken);
                     try
                     {
-                        await Task.Delay(1000, cancToken);
+                        await Task.Delay(Timeout.Infinite,linkedCts.Token);
                     }
-                    catch (TaskCanceledException exception)
+                    catch (OperationCanceledException exception)
                     {
-                        _logger.LogCritical(exception, "TaskCanceledException Error", exception.Message);
+                        if (_wakeupCancTokenSource.Token.IsCancellationRequested)
+                        {
+                            _logger.LogInformation("Publising of Outbox Eevents requested");
+
+                            //Initialise  new wakeup cancellation token and throw away the other one
+                            var tmp = _wakeupCancTokenSource;
+                            _wakeupCancTokenSource = new CancellationTokenSource();
+                            tmp.Dispose();
+
+                        }
+                        else if (cancToken.IsCancellationRequested)
+                        {
+                            _logger.LogInformation("Shutting down service");
+                        }
                     }
 
                 }
@@ -77,7 +107,6 @@ namespace Clenka.UserService
             catch(Exception ex)
             {
                 _logger.LogError($"{typeof(BackgroundEventService).Name} Exception with message: ", ex);
-                await Task.Delay(5000, cancToken);
             }
         }
     }

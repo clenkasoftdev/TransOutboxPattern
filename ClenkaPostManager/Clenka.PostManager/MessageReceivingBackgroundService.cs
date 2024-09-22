@@ -1,65 +1,44 @@
+﻿
 using Clenka.Common.Constants;
-using Clenka.Common.MessageModels;
 using Clenka.PostManager.Data;
-using Clenka.PostManager.Entities;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.OpenApi.Models;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client;
 using System.Text;
+using Newtonsoft.Json.Linq;
+using Clenka.PostManager.Entities;
 
 namespace Clenka.PostManager
 {
-    public class Program
+    public class MessageReceivingBackgroundService : BackgroundService
     {
-        public static void Main(string[] args)
+        private IServiceScopeFactory _scopeFactory;
+        private ILogger<MessageReceivingBackgroundService> _logger; 
+
+        // constructor with arguments
+        public MessageReceivingBackgroundService(IServiceScopeFactory scopeFactory, ILogger<MessageReceivingBackgroundService> logger)
         {
-            var builder = WebApplication.CreateBuilder(args);
+            _scopeFactory = scopeFactory;
+            _logger = logger;
+            using var scope = scopeFactory.CreateScope();
+            using var dbContext = scope.ServiceProvider.GetRequiredService<PostServiceContext>();
+            dbContext.Database.EnsureCreated();
 
-            // Add services to the container.
-
-            builder.Services.AddControllers();
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-            builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen(o =>
-            {
-                o.SwaggerDoc("v1", new OpenApiInfo { Title = "PostService", Version = "v1" });
-            });
-
-            builder.Services.AddDbContext<PostServiceContext>(options =>
-                                      options.UseSqlServer(builder.Configuration.GetConnectionString("PostServiceDb")));
-
-            builder.Services.AddSingleton<MessageReceivingBackgroundService>();
-            builder.Services.AddHostedService<MessageReceivingBackgroundService>(provider =>
-            
-                provider.GetService<MessageReceivingBackgroundService>()
-            
-            );
-
-            var app = builder.Build();
-
-            // Configure the HTTP request pipeline.
-            if (app.Environment.IsDevelopment())
-            {
-                app.UseSwagger();
-                app.UseSwaggerUI();
-                var scope = app.Services.CreateScope();
-                var postCtx = scope.ServiceProvider.GetService<PostServiceContext>();
-                postCtx.Database.EnsureCreated();
-            }
-
-            app.UseAuthorization();
-
-
-            app.MapControllers();
-
-            app.Run();
         }
 
-        #region DEPRECATED
-        private static void ListenForIntegrationEvents(WebApplicationBuilder builder)
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+
+            _logger.LogInformation($"{typeof(MessageReceivingBackgroundService).Name} starting");
+            while (!stoppingToken.IsCancellationRequested) {
+
+                await HandleBackgroundService(stoppingToken);
+            }
+
+            _logger.LogInformation($"{typeof(MessageReceivingBackgroundService).Name} stopping");
+
+        }
+
+        private async Task HandleBackgroundService(CancellationToken stoppingToken)
         {
             try
             {
@@ -73,11 +52,8 @@ namespace Clenka.PostManager
 
                 consumer.Received += (model, ea) =>
                 {
-                    var dbContextOptions = new DbContextOptionsBuilder<PostServiceContext>()
-                        .UseSqlServer(builder.Configuration.GetConnectionString("PostServiceDb"))
-                        .Options;
-
-                    var dbContext = new PostServiceContext(dbContextOptions);
+                    using var scopeFactory = _scopeFactory.CreateScope();
+                    using var dbContext = scopeFactory.ServiceProvider.GetRequiredService<PostServiceContext>();
 
                     var body = ea.Body.ToArray();
                     var message = Encoding.UTF8.GetString(body);
@@ -95,7 +71,7 @@ namespace Clenka.PostManager
                     switch (type)
                     {
                         case GlobalConstants.EXCHANGE_USER_ADD_EVENT:
-                            if(dbContext.Users.Any(o => o.ID == id))
+                            if (dbContext.Users.Any(o => o.ID == id))
                             {
                                 Console.WriteLine($"This duplicate entry for user with id {id} shall be ignored");
                             }
@@ -116,7 +92,7 @@ namespace Clenka.PostManager
                         case GlobalConstants.EXCHANGE_USER_UPDATE_EVENT:
                             int newVersion = version;
                             var foundUser = dbContext.Users.Find(id);
-                            if(foundUser.Version >= version)
+                            if (foundUser.Version >= version)
                             {
                                 Console.WriteLine($"This duplicate entry for user with id {id} shall be ignored");
                             }
@@ -127,7 +103,7 @@ namespace Clenka.PostManager
                                 dbContext.Users.Update(foundUser);
 
                             }
-                            
+
                             break;
                     }
                     dbContext.SaveChanges();
@@ -144,8 +120,6 @@ namespace Clenka.PostManager
             {
                 Console.WriteLine($"Post RabbitMq Receiver error {ex.Message}");
             }
-           
         }
-        #endregion
     }
 }

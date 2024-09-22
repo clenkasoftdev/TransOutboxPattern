@@ -15,10 +15,12 @@ namespace Clenka.UserService.Controllers
     public class UsersController : ControllerBase
     {
         private readonly UserServiceContext _context;
+        private readonly BackgroundEventService _backgroundEventService;
 
-        public UsersController(UserServiceContext context)
+        public UsersController(UserServiceContext context, BackgroundEventService backgroundEventService)
         {
             _context = context;
+            _backgroundEventService = backgroundEventService;
         }
 
         [HttpGet]
@@ -37,6 +39,7 @@ namespace Clenka.UserService.Controllers
             {
                 id = user.ID,
                 name = user.Name,
+                version = user.Version
             });
 
             _context.OutboxEvents.Add(new OutboxEvent
@@ -48,6 +51,7 @@ namespace Clenka.UserService.Controllers
             _context.SaveChanges();
             transacton.Commit();
 
+            _backgroundEventService.StartPublishingOutsandingOutBoxEevnts();
             // PUBLISHING THE MESSAGE IS NO LONGER NEEDED. A BACKGROUND JOB SHALL TAKE CARE
             // PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_UPDATE_EVENT, integrationEventData);
 
@@ -67,6 +71,7 @@ namespace Clenka.UserService.Controllers
             {
                 id = user.ID,
                 name = user.Name,
+                version = user.Version,
             });
 
             _context.OutboxEvents.Add(new OutboxEvent
@@ -80,8 +85,9 @@ namespace Clenka.UserService.Controllers
 
             transaction.Commit();
 
+            _backgroundEventService.StartPublishingOutsandingOutBoxEevnts();
             // PUBLISHING THE MESSAGE IS NO LONGER NEEDED. A BACKGROUND JOB SHALL TAKE CARE
-           // PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_ADD_EVENT, integrationEventData);
+            // PublishToMessageQueue(GlobalConstants.EXCHANGE_USER_ADD_EVENT, integrationEventData);
 
             return CreatedAtAction("GetUser", new { id = user.ID }, user);
         }
